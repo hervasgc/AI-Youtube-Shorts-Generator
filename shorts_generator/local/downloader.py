@@ -5,11 +5,23 @@ directly off disk.
 """
 import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR, YOUTUBE_COOKIES_FILE
+
+
+def _writable_cookiefile() -> Optional[str]:
+    """yt-dlp rewrites the cookiejar after use; a Secret Manager mount is
+    read-only, so copy it to a scratch file the process can write back to."""
+    if not YOUTUBE_COOKIES_FILE:
+        return None
+    writable = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+    shutil.copyfile(YOUTUBE_COOKIES_FILE, writable)
+    return writable
 
 
 def _import_ytdlp():
@@ -120,8 +132,9 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "noprogress": True,
         "nocheckcertificate": True,
     }
-    if YOUTUBE_COOKIES_FILE:
-        ydl_opts["cookiefile"] = YOUTUBE_COOKIES_FILE
+    cookiefile = _writable_cookiefile()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
