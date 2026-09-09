@@ -20,6 +20,12 @@ LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 
+# Cloud deployment (optional): when set, local-mode output clips are uploaded
+# to this GCS bucket and clip_url becomes a signed HTTPS URL instead of a
+# local path. Leave unset for plain local/dev usage.
+GCS_OUTPUT_BUCKET = os.getenv("GCS_OUTPUT_BUCKET", "").strip()
+GCS_SIGNED_URL_EXPIRY_SECONDS = int(os.getenv("GCS_SIGNED_URL_EXPIRY_SECONDS", "3600"))
+
 # VAD (Voice Activity Detection) settings for faster-whisper
 # Default threshold is 0.5; lower = more sensitive, higher = less sensitive
 # Default min_speech_duration_ms is 250ms; increase to avoid tiny false positives

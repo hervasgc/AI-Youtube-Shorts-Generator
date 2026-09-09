@@ -285,6 +285,30 @@ AI-Youtube-Shorts-Generator/
         └── clipper.py            ffmpeg cut + OpenCV vertical crop
 ```
 
+## Deploy on GCP (Cloud Run)
+
+The Streamlit UI (`app.py`) ships with a `Dockerfile` and can run on Cloud Run in `--mode local` (ffmpeg + faster-whisper + OpenCV baked into the image). The service is kept private (`--no-allow-unauthenticated`) so only IAM-authorized callers can use it, and generated clips are persisted to a GCS bucket and served back as signed URLs instead of local paths.
+
+Push to `main` to trigger `.github/workflows/deploy.yml` (needs a `GCP_SA_KEY` repo secret with a service account key that has `run.admin`, `storage.admin`, `secretmanager.secretAccessor`, `iam.serviceAccountUser`, and `iam.serviceAccountTokenCreator` on itself), or deploy manually:
+
+```bash
+gcloud run deploy ai-youtube-shorts-generator \
+  --source . --project radiant-tide-401723 --region southamerica-east1 \
+  --no-allow-unauthenticated \
+  --service-account github-sentimento-analise@radiant-tide-401723.iam.gserviceaccount.com \
+  --cpu=4 --memory=8Gi --timeout=3600 --concurrency=1 --min-instances=0 \
+  --set-secrets=GEMINI_API_KEY=ai-shorts-gemini-api-key:latest \
+  --set-env-vars=LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,LOCAL_OUTPUT_DIR=/tmp/output,LOCAL_WHISPER_MODEL=base,LOCAL_WHISPER_DEVICE=cpu,GCS_OUTPUT_BUCKET=radiant-tide-401723-ai-shorts
+```
+
+Since the service is private, access it through an authenticated tunnel instead of the raw URL:
+
+```bash
+gcloud run services proxy ai-youtube-shorts-generator --region southamerica-east1 --project radiant-tide-401723
+```
+
+then open `http://localhost:8080`.
+
 ## Troubleshooting
 
 ### Whisper produced no segments

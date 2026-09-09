@@ -6,9 +6,11 @@ Two modes:
   * mode="local"            — yt-dlp + faster-whisper + OpenAI or Gemini + ffmpeg/opencv.
                               Self-hosted, LLM_PROVIDER selects OpenAI or Gemini.
 """
+import os
 from typing import Dict, List, Optional
 
 from .clipper import crop_highlights
+from .config import GCS_OUTPUT_BUCKET
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
 from .transcriber import transcribe
@@ -43,6 +45,14 @@ def _run_local(
     print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
     shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio)
+
+    if GCS_OUTPUT_BUCKET:
+        from .local.storage import upload_and_sign
+
+        for short in shorts:
+            clip_path = short.get("clip_url")
+            if clip_path and os.path.exists(clip_path):
+                short["clip_url"] = upload_and_sign(clip_path, os.path.basename(clip_path))
 
     return {
         "mode": "local",
