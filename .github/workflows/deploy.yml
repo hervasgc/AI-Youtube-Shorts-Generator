@@ -35,5 +35,5 @@ jobs:
             --no-allow-unauthenticated \
             --service-account "$RUNTIME_SA" \
             --cpu=4 --memory=8Gi --timeout=3600 --concurrency=1 --min-instances=0 \
-            --set-secrets=GEMINI_API_KEY=ai-shorts-gemini-api-key:latest \
-            --set-env-vars=LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,LOCAL_OUTPUT_DIR=/tmp/output,LOCAL_WHISPER_MODEL=base,LOCAL_WHISPER_DEVICE=cpu,GCS_OUTPUT_BUCKET=radiant-tide-401723-ai-shorts
+            --set-secrets=GEMINI_API_KEY=ai-shorts-gemini-api-key:latest,/secrets/youtube-cookies.txt=ai-shorts-youtube-cookies:latest \
+            --set-env-vars=LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,LOCAL_OUTPUT_DIR=/tmp/output,LOCAL_WHISPER_MODEL=base,LOCAL_WHISPER_DEVICE=cpu,GCS_OUTPUT_BUCKET=radiant-tide-401723-ai-shorts,YOUTUBE_COOKIES_FILE=/secrets/youtube-cookies.txt

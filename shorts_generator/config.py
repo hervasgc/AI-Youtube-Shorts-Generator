@@ -20,6 +20,10 @@ LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
 
+# Optional path to a Netscape-format cookies.txt for yt-dlp. Needed when
+# downloading from an IP YouTube flags as a bot (e.g. Cloud Run/GCE/AWS).
+YOUTUBE_COOKIES_FILE = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+
 # Cloud deployment (optional): when set, local-mode output clips are uploaded
 # to this GCS bucket and clip_url becomes a signed HTTPS URL instead of a
 # local path. Leave unset for plain local/dev usage.

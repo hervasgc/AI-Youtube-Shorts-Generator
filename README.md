@@ -297,9 +297,11 @@ gcloud run deploy ai-youtube-shorts-generator \
   --no-allow-unauthenticated \
   --service-account github-sentimento-analise@radiant-tide-401723.iam.gserviceaccount.com \
   --cpu=4 --memory=8Gi --timeout=3600 --concurrency=1 --min-instances=0 \
-  --set-secrets=GEMINI_API_KEY=ai-shorts-gemini-api-key:latest \
-  --set-env-vars=LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,LOCAL_OUTPUT_DIR=/tmp/output,LOCAL_WHISPER_MODEL=base,LOCAL_WHISPER_DEVICE=cpu,GCS_OUTPUT_BUCKET=radiant-tide-401723-ai-shorts
+  --set-secrets=GEMINI_API_KEY=ai-shorts-gemini-api-key:latest,/secrets/youtube-cookies.txt=ai-shorts-youtube-cookies:latest \
+  --set-env-vars=LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,LOCAL_OUTPUT_DIR=/tmp/output,LOCAL_WHISPER_MODEL=base,LOCAL_WHISPER_DEVICE=cpu,GCS_OUTPUT_BUCKET=radiant-tide-401723-ai-shorts,YOUTUBE_COOKIES_FILE=/secrets/youtube-cookies.txt
 ```
+
+YouTube blocks yt-dlp downloads from datacenter IPs (Cloud Run included) with a "Sign in to confirm you're not a bot" error. The fix is exporting a Netscape-format `cookies.txt` from a logged-in browser session (e.g. the "Get cookies.txt LOCALLY" extension) and storing it as the `ai-shorts-youtube-cookies` secret above — `YOUTUBE_COOKIES_FILE` then points `yt-dlp` at the mounted file. Not needed when running locally on a residential/office IP.
 
 Since the service is private, access it through an authenticated tunnel instead of the raw URL:
 
