@@ -303,6 +303,8 @@ gcloud run deploy ai-youtube-shorts-generator \
 
 YouTube blocks yt-dlp downloads from datacenter IPs (Cloud Run included) with a "Sign in to confirm you're not a bot" error. The fix is exporting a Netscape-format `cookies.txt` from a logged-in browser session (e.g. the "Get cookies.txt LOCALLY" extension) and storing it as the `ai-shorts-youtube-cookies` secret above — `YOUTUBE_COOKIES_FILE` then points `yt-dlp` at the mounted file. Not needed when running locally on a residential/office IP.
 
+**Known limitation**: even with cookies, this is a cat-and-mouse game against Google's own abuse detection — a session that works from a Cloud Run IP can get flagged again a few minutes later (observed in testing: worked once, then failed with the same bot-check error shortly after). Re-exporting fresh cookies sometimes helps temporarily; there is no fully reliable fix currently wired up. If you need guaranteed downloads, run in `--mode api` (MuAPI handles the download server-side) or download the source video locally first and pass a local path instead of a YouTube URL.
+
 Since the service is private, access it through an authenticated tunnel instead of the raw URL:
 
 ```bash
