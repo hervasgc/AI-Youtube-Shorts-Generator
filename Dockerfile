@@ -19,4 +19,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
-CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.headless=true"]
+CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.headless=true", "--server.maxUploadSize=2048"]

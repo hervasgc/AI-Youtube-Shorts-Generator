@@ -1,11 +1,13 @@
 import streamlit as st
 import os
 import sys
+import uuid
 
 # Ensure the app can import from shorts_generator
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from shorts_generator import generate_shorts
+from shorts_generator.config import LOCAL_OUTPUT_DIR
 
 st.set_page_config(
     page_title="AI YouTube Shorts Generator",
@@ -58,12 +60,37 @@ with st.sidebar:
 
 st.divider()
 
-url = st.text_input("🔗 Paste YouTube URL or local file path here", placeholder="https://www.youtube.com/watch?v=...")
+source_kind = st.radio(
+    "Fonte do vídeo",
+    ["🔗 URL do YouTube", "📤 Enviar arquivo"],
+    index=0,
+    horizontal=True,
+    help="Na nuvem, prefira 'Enviar arquivo' — baixar por URL pode ser bloqueado pelo YouTube (detecção de bot em IPs de datacenter). Baixe localmente e envie o arquivo aqui.",
+)
+
+url = None
+uploaded_file = None
+
+if source_kind == "🔗 URL do YouTube":
+    url = st.text_input("🔗 Paste YouTube URL or local file path here", placeholder="https://www.youtube.com/watch?v=...")
+else:
+    uploaded_file = st.file_uploader(
+        "📤 Selecione o vídeo",
+        type=["mp4", "mov", "mkv", "webm", "m4v"],
+    )
 
 if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
-    if not url:
+    if source_kind == "🔗 URL do YouTube" and not url:
         st.warning("Please enter a valid URL or path.")
+    elif source_kind == "📤 Enviar arquivo" and not uploaded_file:
+        st.warning("Selecione um arquivo de vídeo para continuar.")
     else:
+        if uploaded_file is not None:
+            os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+            ext = os.path.splitext(uploaded_file.name)[1] or ".mp4"
+            url = os.path.join(LOCAL_OUTPUT_DIR, f"upload_{uuid.uuid4().hex}{ext}")
+            with open(url, "wb") as f:
+                f.write(uploaded_file.getbuffer())
         # Provide feedback
         status_text = st.empty()
         status_text.info("Downloading and processing... this may take a few minutes. Check the terminal for detailed logs.")

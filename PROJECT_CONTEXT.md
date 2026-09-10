@@ -80,13 +80,12 @@ Ordem cronológica do que foi feito e por quê — útil para entender *decisõe
    - CI/CD via GitHub Actions, reaproveitando a service account `github-sentimento-analise@radiant-tide-401723.iam.gserviceaccount.com` já usada por outros serviços do mesmo projeto GCP (em vez de criar SAs novas — decisão do usuário, por conveniência, abrindo mão do "least privilege" que eu tinha proposto inicialmente).
 6. **Limitação descoberta em produção: bloqueio anti-bot do YouTube.** `yt-dlp` rodando do IP de datacenter do Cloud Run leva "Sign in to confirm you're not a bot" — isso não acontece rodando do Mac do usuário (IP residencial/corporativo). Mitigação implementada: cookies de sessão do YouTube (exportados do navegador, arquivo scoped só a `youtube.com` — nunca o export "todos os cookies", que continha sessões de dezenas de outros sites e é sensível demais para guardar em qualquer lugar). Os cookies são montados como secret read-only no Cloud Run; o código copia pra um scratch file gravável em `/tmp` antes de usar, porque o `yt-dlp` tenta regravar o cookiejar ao final da execução. **Mesmo assim, a mitigação não é 100% confiável**: funcionou uma vez, falhou de novo poucos minutos depois (o Google parece sinalizar a sessão após uso automatizado detectado). Decisão do usuário: aceitar essa instabilidade por ora, documentada no README.
 7. **Limpeza:** processos locais (Streamlit, `gcloud run services proxy`) encerrados a pedido do usuário ao final da sessão.
+8. **Acesso via URL real do Cloud Run: IAP habilitado.** O usuário habilitou o Identity-Aware Proxy no serviço (via Console, fora desta sessão). Isso exige a role `roles/iap.httpsResourceAccessor` — que **nem `roles/owner` do projeto concede automaticamente** — pra qualquer principal, incluindo o próprio dono do projeto. Faltava esse binding especificamente; resolvido concedendo a role pro usuário (ver seção 3.4). Lição: IAP é uma camada de autorização separada das roles primitivas do IAM.
+9. **Decisão final sobre o bloqueio do YouTube: mudar o fluxo de entrada.** Depois de confirmar que cookies não resolvem de forma definitiva (item 6), avaliamos as alternativas (trocar player client do yt-dlp, PO token provider, proxy residencial pago, delegar download pra MuAPI, ou eliminar a URL ao vivo do fluxo de produção) e o usuário escolheu a última: **upload de arquivo em vez de URL na nuvem**. Implementado em `app.py` (seletor "🔗 URL do YouTube" / "📤 Enviar arquivo" com `st.file_uploader`, salvando num path local único e passando pro pipeline exatamente como um arquivo local — zero mudança em `pipeline.py`/`downloader.py`, já que `_resolve_local_path` já tratava paths locais). `Dockerfile` ganhou `--server.maxUploadSize=2048`. A mitigação de cookies continua no código como fallback best-effort pra quem ainda quiser colar URL.
 
 ### Coisas que ficaram para depois (não resolvidas)
 - Rotacionar a `GEMINI_API_KEY` que foi exposta em texto puro no `.env.example` (item 2 acima).
-- Acesso via a URL real do Cloud Run (hoje só funciona via `gcloud run services proxy`, que exige terminal aberto). Duas opções discutidas e ainda não implementadas:
-  - **IAP (Identity-Aware Proxy)** no Cloud Run — login Google normal ao abrir a URL. Requer configurar tela de consentimento OAuth do projeto.
-  - Extensão de navegador (ModHeader) injetando `Authorization: Bearer <identity-token>` — mais simples, mas o token expira em ~1h.
-- Instabilidade do download de YouTube via `yt-dlp` a partir de IP de datacenter (seção 6 acima) — sem solução definitiva.
+- Testar upload de um vídeo grande (dezenas/centenas de MB) direto pela URL do Cloud Run em produção — validado localmente (via chamada direta ao pipeline) e por inspeção do limite de request do Cloud Run (32MiB só em HTTP/1, não deve afetar HTTP/2), mas não testado ainda com um upload real de navegador na URL de produção.
 
 ---
 
@@ -154,12 +153,30 @@ Autenticação do GitHub Actions: secret de repositório `GCP_SA_KEY` (chave JSO
 
 ### 3.4 Acessando o serviço (privado — sem `allUsers`)
 
+**Opção A — URL direta com IAP (habilitado nesse serviço):**
+
+```bash
+gcloud run services add-iam-policy-binding ai-youtube-shorts-generator \
+  --project=radiant-tide-401723 --region=southamerica-east1 \
+  --member="user:gustavo.hervas@monks.com" \
+  --role="roles/iap.httpsResourceAccessor"
+```
+Precisa dessa role específica mesmo sendo `roles/owner` do projeto — IAP é uma camada de
+autorização separada, não herda das roles primitivas do IAM. Depois de concedida, abrir a
+URL do serviço direto no navegador pede login do Google e libera o acesso. Também dá pra
+conceder pela Console: *Security → Identity-Aware Proxy* → marcar o serviço → *Add
+Principal* → role **"Cloud IAP" → "IAP-secured Web App User"**.
+
+**Opção B — túnel via `gcloud` (sem IAP, ou como alternativa):**
+
 ```bash
 gcloud run services proxy ai-youtube-shorts-generator \
   --project=radiant-tide-401723 --region=southamerica-east1 --port=8502
 # depois abrir http://127.0.0.1:8502
 ```
-Funciona porque quem roda o comando (`gustavo.hervas@monks.com`) já é `roles/owner` do projeto — não foi necessário nenhum binding de IAM adicional para o próprio dono. Ver seção 2 ("coisas que ficaram para depois") para as duas alternativas de acesso via URL direta.
+Funciona porque quem roda o comando (`gustavo.hervas@monks.com`) já é `roles/owner` do
+projeto — não precisa de nenhum binding de IAM adicional pro próprio dono (essa checagem
+de `run.invoker` via proxy é diferente da checagem do IAP na opção A).
 
 ### 3.5 Variáveis de ambiente relevantes (`shorts_generator/config.py`)
 
@@ -188,3 +205,5 @@ Regras e padrões que emergiram nesta sessão e que devem ser o ponto de partida
 7. **Testar downloads/scraping de terceiros (YouTube, etc.) a partir do IP real de produção antes de assumir que "funciona igual ao local".** IPs de datacenter GCP são frequentemente tratados como tráfego suspeito por serviços como YouTube — algo que nunca aparece rodando do Mac/escritório do desenvolvedor.
 8. **Padrão de projeto GCP identificado:** `radiant-tide-401723`, região `southamerica-east1`, com Cloud Run + Cloud Build + Artifact Registry + Secret Manager já habilitados — esse é o projeto "casa" para novos protótipos/demos da organização; confirmar com o usuário se um novo projeto deve ir para esse mesmo projeto GCP ou para um novo.
 9. **Antes de qualquer deploy real (custo, IAM, infraestrutura), validar o plano com o usuário** (uso de plan mode) — não criar recursos faturáveis ou alterar permissões sem aprovação explícita do escopo.
+10. **IAP (Identity-Aware Proxy) é uma camada de autorização separada do IAM básico.** Habilitar IAP num Cloud Run service não basta — cada principal (incluindo `roles/owner` do projeto) precisa da role `roles/iap.httpsResourceAccessor` explicitamente naquele recurso pra deixar de ver "You don't have access". Não assumir que uma role primitiva ampla cobre IAP.
+11. **Testar integrações com serviços de terceiros que podem bloquear tráfego de nuvem (scraping, downloads, APIs anti-abuso) é mais confiável evitando o problema na origem do que tentando contornar a detecção.** Nesse projeto, cookies/proxy/rotação de client foram cogitados, mas a solução mais robusta foi eliminar a dependência de rede não confiável (upload de arquivo em vez de download ao vivo) — vale considerar esse tipo de mudança de fluxo antes de investir em soluções cada vez mais frágeis contra anti-bot de terceiros.
