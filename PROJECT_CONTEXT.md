@@ -81,11 +81,13 @@ Ordem cronológica do que foi feito e por quê — útil para entender *decisõe
 6. **Limitação descoberta em produção: bloqueio anti-bot do YouTube.** `yt-dlp` rodando do IP de datacenter do Cloud Run leva "Sign in to confirm you're not a bot" — isso não acontece rodando do Mac do usuário (IP residencial/corporativo). Mitigação implementada: cookies de sessão do YouTube (exportados do navegador, arquivo scoped só a `youtube.com` — nunca o export "todos os cookies", que continha sessões de dezenas de outros sites e é sensível demais para guardar em qualquer lugar). Os cookies são montados como secret read-only no Cloud Run; o código copia pra um scratch file gravável em `/tmp` antes de usar, porque o `yt-dlp` tenta regravar o cookiejar ao final da execução. **Mesmo assim, a mitigação não é 100% confiável**: funcionou uma vez, falhou de novo poucos minutos depois (o Google parece sinalizar a sessão após uso automatizado detectado). Decisão do usuário: aceitar essa instabilidade por ora, documentada no README.
 7. **Limpeza:** processos locais (Streamlit, `gcloud run services proxy`) encerrados a pedido do usuário ao final da sessão.
 8. **Acesso via URL real do Cloud Run: IAP habilitado.** O usuário habilitou o Identity-Aware Proxy no serviço (via Console, fora desta sessão). Isso exige a role `roles/iap.httpsResourceAccessor` — que **nem `roles/owner` do projeto concede automaticamente** — pra qualquer principal, incluindo o próprio dono do projeto. Faltava esse binding especificamente; resolvido concedendo a role pro usuário (ver seção 3.4). Lição: IAP é uma camada de autorização separada das roles primitivas do IAM.
-9. **Decisão final sobre o bloqueio do YouTube: mudar o fluxo de entrada.** Depois de confirmar que cookies não resolvem de forma definitiva (item 6), avaliamos as alternativas (trocar player client do yt-dlp, PO token provider, proxy residencial pago, delegar download pra MuAPI, ou eliminar a URL ao vivo do fluxo de produção) e o usuário escolheu a última: **upload de arquivo em vez de URL na nuvem**. Implementado em `app.py` (seletor "🔗 URL do YouTube" / "📤 Enviar arquivo" com `st.file_uploader`, salvando num path local único e passando pro pipeline exatamente como um arquivo local — zero mudança em `pipeline.py`/`downloader.py`, já que `_resolve_local_path` já tratava paths locais). `Dockerfile` ganhou `--server.maxUploadSize=2048`. A mitigação de cookies continua no código como fallback best-effort pra quem ainda quiser colar URL.
+9. **Decisão final sobre o bloqueio do YouTube: mudar o fluxo de entrada.** Depois de confirmar que cookies não resolvem de forma definitiva (item 6), avaliamos as alternativas (trocar player client do yt-dlp, PO token provider, proxy residencial pago, delegar download pra MuAPI, ou eliminar a URL ao vivo do fluxo de produção) e o usuário escolheu a última: **upload de arquivo em vez de URL na nuvem**. Primeira implementação em `app.py`: seletor "🔗 URL do YouTube" / "📤 Enviar arquivo" com `st.file_uploader`, salvando num path local único e passando pro pipeline como um arquivo local (zero mudança em `pipeline.py`/`downloader.py`, já que `_resolve_local_path` já tratava paths locais). A mitigação de cookies continua no código como fallback best-effort pra quem ainda quiser colar URL.
+10. **Bug: corrida entre execuções sobrepostas no crop local.** `crop_highlights_local` escrevia sempre nos mesmos nomes fixos (`short_01.mp4.cut.mp4` etc). Duas execuções sobrepostas (ex: duplo clique, duas abas apontando pro mesmo servidor local) colidiam nesses arquivos — uma apagava o intermediário enquanto a outra ainda lia, dando "could not open" em todos os clipes de uma vez. Fix: cada chamada gera um `run_id` (uuid curto) e prefixa os nomes de arquivo com ele (`shorts_generator/local/clipper.py`).
+11. **Bug real em produção: upload de arquivo falhava com HTTP 413.** Ao testar o upload de arquivo (item 9) num vídeo de ~93MB direto na URL do Cloud Run, deu `413 Request Entity Too Large`. Isso **corrigiu uma suposição errada** anotada antes neste documento: o limite de ~32MB de request body do Cloud Run **se aplica na prática**, mesmo com HTTP/2 e mesmo ajustando `--server.maxUploadSize` do Streamlit — o limite é imposto pela própria infraestrutura do Cloud Run antes do tráfego chegar no container, então nenhum upload via `st.file_uploader` (que passa pelo mesmo request path do Cloud Run) funciona para vídeos de tamanho real. Fix: quando `GCS_OUTPUT_BUCKET` está setado, a UI passa a renderizar um componente HTML/JS embutido (`st.components.v1.html`) que faz o navegador enviar o arquivo **direto pro bucket GCS via signed URL PUT** (`shorts_generator/local/storage.py:generate_upload_url`), contornando o Cloud Run por completo pros bytes do arquivo; o app baixa o objeto do GCS no servidor (`download_to_file`) só depois, antes de processar. Precisou habilitar CORS no bucket pras origens do Cloud Run (ver seção 3.2). Localmente (sem `GCS_OUTPUT_BUCKET`), a UI continua usando `st.file_uploader` normal — sem esse limite fora do Cloud Run.
 
 ### Coisas que ficaram para depois (não resolvidas)
 - Rotacionar a `GEMINI_API_KEY` que foi exposta em texto puro no `.env.example` (item 2 acima).
-- Testar upload de um vídeo grande (dezenas/centenas de MB) direto pela URL do Cloud Run em produção — validado localmente (via chamada direta ao pipeline) e por inspeção do limite de request do Cloud Run (32MiB só em HTTP/1, não deve afetar HTTP/2), mas não testado ainda com um upload real de navegador na URL de produção.
+- Testar o upload direto-pro-GCS (item 11) com um vídeo de tamanho real na URL de produção depois do fix — validado só até a configuração de CORS + deploy nesta sessão.
 
 ---
 
@@ -133,6 +135,26 @@ gcloud iam service-accounts add-iam-policy-binding \
   github-sentimento-analise@radiant-tide-401723.iam.gserviceaccount.com --project=radiant-tide-401723 \
   --member="serviceAccount:github-sentimento-analise@radiant-tide-401723.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountTokenCreator"   # necessário pra gerar signed URLs do bucket sem chave privada
+
+# CORS no bucket, pro navegador conseguir dar PUT direto no GCS a partir do
+# domínio do Cloud Run (upload de arquivo grande — ver seção 2, item 11)
+cat > cors.json <<'JSON'
+[
+  {
+    "origin": [
+      "https://ai-youtube-shorts-generator-654852193118.southamerica-east1.run.app",
+      "https://ai-youtube-shorts-generator-zj2e5a77ka-rj.a.run.app",
+      "http://localhost:8501",
+      "http://127.0.0.1:8501"
+    ],
+    "method": ["PUT", "GET", "HEAD"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
+JSON
+gcloud storage buckets update gs://radiant-tide-401723-ai-shorts \
+  --project=radiant-tide-401723 --cors-file=cors.json
 ```
 
 ### 3.3 Deploy (o que o GitHub Actions roda a cada push em `main`)
@@ -207,3 +229,4 @@ Regras e padrões que emergiram nesta sessão e que devem ser o ponto de partida
 9. **Antes de qualquer deploy real (custo, IAM, infraestrutura), validar o plano com o usuário** (uso de plan mode) — não criar recursos faturáveis ou alterar permissões sem aprovação explícita do escopo.
 10. **IAP (Identity-Aware Proxy) é uma camada de autorização separada do IAM básico.** Habilitar IAP num Cloud Run service não basta — cada principal (incluindo `roles/owner` do projeto) precisa da role `roles/iap.httpsResourceAccessor` explicitamente naquele recurso pra deixar de ver "You don't have access". Não assumir que uma role primitiva ampla cobre IAP.
 11. **Testar integrações com serviços de terceiros que podem bloquear tráfego de nuvem (scraping, downloads, APIs anti-abuso) é mais confiável evitando o problema na origem do que tentando contornar a detecção.** Nesse projeto, cookies/proxy/rotação de client foram cogitados, mas a solução mais robusta foi eliminar a dependência de rede não confiável (upload de arquivo em vez de download ao vivo) — vale considerar esse tipo de mudança de fluxo antes de investir em soluções cada vez mais frágeis contra anti-bot de terceiros.
+12. **Cloud Run tem um limite real de ~32MB por corpo de request, que se aplica na prática** — mesmo com HTTP/2 e mesmo aumentando o limite de upload da própria aplicação (ex: `--server.maxUploadSize` do Streamlit). Qualquer upload de arquivo real (vídeo, imagem grande, dataset) precisa ir **direto pro Cloud Storage via signed URL** a partir do navegador, contornando o Cloud Run inteiramente pros bytes do arquivo — não existe configuração que aumente esse teto do lado do Cloud Run. Lembrar de configurar CORS no bucket pra origem do serviço quando fizer isso.

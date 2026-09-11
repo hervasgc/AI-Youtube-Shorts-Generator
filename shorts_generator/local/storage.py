@@ -24,3 +24,28 @@ def upload_and_sign(local_path: str, dest_name: str) -> str:
         expiration=datetime.timedelta(seconds=GCS_SIGNED_URL_EXPIRY_SECONDS),
         method="GET",
     )
+
+
+def generate_upload_url(dest_name: str, expiry_seconds: int = 1800) -> str:
+    """Signed PUT URL so the browser can upload straight to GCS, bypassing
+    Cloud Run's ~32MB request body limit entirely."""
+    from google.cloud import storage
+
+    client = storage.Client()
+    bucket = client.bucket(GCS_OUTPUT_BUCKET)
+    blob = bucket.blob(dest_name)
+
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(seconds=expiry_seconds),
+        method="PUT",
+    )
+
+
+def download_to_file(dest_name: str, local_path: str) -> str:
+    from google.cloud import storage
+
+    client = storage.Client()
+    bucket = client.bucket(GCS_OUTPUT_BUCKET)
+    bucket.blob(dest_name).download_to_filename(local_path)
+    return local_path

@@ -305,7 +305,16 @@ YouTube blocks yt-dlp downloads from datacenter IPs (Cloud Run included) with a 
 
 **Known limitation**: even with cookies, this is a cat-and-mouse game against Google's own abuse detection — a session that works from a Cloud Run IP can get flagged again a few minutes later (observed in testing: worked once, then failed with the same bot-check error shortly after). Re-exporting fresh cookies sometimes helps temporarily; there is no fully reliable fix currently wired up.
 
-**Recommended workaround in production**: use the "📤 Enviar arquivo" / upload-file option in the UI instead of pasting a YouTube URL. Download the source video locally first (works fine from a residential/office IP) and upload the file directly — it's saved straight to the container's local disk and skips `yt-dlp`/YouTube entirely, so there's no bot-check risk. The cookies mitigation above stays in place as a best-effort fallback for whoever still wants to paste a URL in the cloud. The Dockerfile sets `--server.maxUploadSize=2048` (2GB) to fit full-length source videos.
+**Recommended workaround in production**: use the "📤 Enviar arquivo" / upload-file option in the UI instead of pasting a YouTube URL. Download the source video locally first (works fine from a residential/office IP) and upload the file — it skips `yt-dlp`/YouTube entirely, so there's no bot-check risk. The cookies mitigation above stays in place as a best-effort fallback for whoever still wants to paste a URL in the cloud.
+
+**Cloud Run has a ~32MB request body limit**, so real source videos can't go through Streamlit's own `st.file_uploader` in production (it POSTs through the same Cloud Run request path — bumping `--server.maxUploadSize` doesn't help, the platform itself rejects the body with a 413 before it reaches the container). When `GCS_OUTPUT_BUCKET` is set, the UI instead renders a small embedded upload widget that PUTs the file **straight to the GCS bucket** with a signed URL (`shorts_generator/local/storage.py:generate_upload_url`), bypassing Cloud Run entirely for the file bytes; the app then downloads it server-side from GCS before processing. This needs CORS enabled on the bucket for the Cloud Run origin(s):
+
+```bash
+gcloud storage buckets update gs://radiant-tide-401723-ai-shorts \
+  --cors-file=cors.json   # allow PUT/GET from the Cloud Run URL(s), see PROJECT_CONTEXT.md
+```
+
+Locally (`GCS_OUTPUT_BUCKET` unset), the UI falls back to the plain `st.file_uploader` — fine for local dev since there's no Cloud Run body limit involved.
 
 Since the service is private, access it through an authenticated tunnel instead of the raw URL:
 

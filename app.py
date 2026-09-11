@@ -6,8 +6,10 @@ import uuid
 # Ensure the app can import from shorts_generator
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import streamlit.components.v1 as components
+
 from shorts_generator import generate_shorts
-from shorts_generator.config import LOCAL_OUTPUT_DIR
+from shorts_generator.config import LOCAL_OUTPUT_DIR, GCS_OUTPUT_BUCKET
 
 st.set_page_config(
     page_title="AI YouTube Shorts Generator",
@@ -70,9 +72,52 @@ source_kind = st.radio(
 
 url = None
 uploaded_file = None
+gcs_upload_blob = None
+upload_confirmed = False
 
 if source_kind == "🔗 URL do YouTube":
     url = st.text_input("🔗 Paste YouTube URL or local file path here", placeholder="https://www.youtube.com/watch?v=...")
+elif GCS_OUTPUT_BUCKET:
+    # Cloud Run caps request bodies at ~32MB, so a real source video can't go
+    # through st.file_uploader (which POSTs through the same Cloud Run
+    # request path). Instead the browser uploads straight to GCS with a
+    # signed PUT URL, bypassing Cloud Run entirely for the file bytes.
+    from shorts_generator.local.storage import generate_upload_url
+
+    if "upload_blob_name" not in st.session_state:
+        st.session_state.upload_blob_name = f"uploads/{uuid.uuid4().hex}.mp4"
+    gcs_upload_blob = st.session_state.upload_blob_name
+    upload_url = generate_upload_url(gcs_upload_blob)
+
+    components.html(
+        f"""
+        <div style="font-family: sans-serif;">
+          <input type="file" id="videoFile" accept="video/*" style="margin-bottom:8px;">
+          <button id="uploadBtn" style="padding:6px 16px; cursor:pointer;">📤 Enviar pro bucket</button>
+          <p id="uploadStatus" style="margin-top:8px;"></p>
+        </div>
+        <script>
+        document.getElementById('uploadBtn').onclick = async () => {{
+          const file = document.getElementById('videoFile').files[0];
+          const status = document.getElementById('uploadStatus');
+          if (!file) {{ status.innerText = "Selecione um arquivo primeiro."; return; }}
+          status.innerText = "Enviando... pode levar alguns minutos para arquivos grandes.";
+          try {{
+            const resp = await fetch("{upload_url}", {{ method: 'PUT', body: file }});
+            if (resp.ok) {{
+              status.innerText = "✅ Upload completo! Marque a confirmação abaixo e clique em Generate Shorts.";
+            }} else {{
+              status.innerText = "❌ Erro no upload: " + resp.status + " " + await resp.text();
+            }}
+          }} catch (e) {{
+            status.innerText = "❌ Erro no upload: " + e;
+          }}
+        }};
+        </script>
+        """,
+        height=150,
+    )
+    upload_confirmed = st.checkbox("✅ Já terminei o upload acima (vi a mensagem de sucesso)")
 else:
     uploaded_file = st.file_uploader(
         "📤 Selecione o vídeo",
@@ -82,7 +127,9 @@ else:
 if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
     if source_kind == "🔗 URL do YouTube" and not url:
         st.warning("Please enter a valid URL or path.")
-    elif source_kind == "📤 Enviar arquivo" and not uploaded_file:
+    elif source_kind == "📤 Enviar arquivo" and GCS_OUTPUT_BUCKET and not upload_confirmed:
+        st.warning("Envie o arquivo acima e marque a confirmação antes de continuar.")
+    elif source_kind == "📤 Enviar arquivo" and not GCS_OUTPUT_BUCKET and not uploaded_file:
         st.warning("Selecione um arquivo de vídeo para continuar.")
     else:
         if uploaded_file is not None:
@@ -91,6 +138,15 @@ if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
             url = os.path.join(LOCAL_OUTPUT_DIR, f"upload_{uuid.uuid4().hex}{ext}")
             with open(url, "wb") as f:
                 f.write(uploaded_file.getbuffer())
+        elif gcs_upload_blob is not None:
+            from shorts_generator.local.storage import download_to_file
+
+            os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+            url = os.path.join(LOCAL_OUTPUT_DIR, f"upload_{uuid.uuid4().hex}.mp4")
+            download_status = st.empty()
+            download_status.info("Baixando o arquivo enviado...")
+            download_to_file(gcs_upload_blob, url)
+            del st.session_state["upload_blob_name"]
         # Provide feedback
         status_text = st.empty()
         status_text.info("Downloading and processing... this may take a few minutes. Check the terminal for detailed logs.")
