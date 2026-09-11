@@ -119,7 +119,7 @@ python main.py "https://www.youtube.com/watch?v=VIDEO_ID"
 python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
 ```
 
-Local mode writes the rendered shorts to `./output/short_01.mp4`, `short_02.mp4`, … (override with `LOCAL_OUTPUT_DIR`).
+Local mode writes the rendered shorts to `./output/short_<run_id>_01.mp4`, `short_<run_id>_02.mp4`, … (override with `LOCAL_OUTPUT_DIR`). Each run gets its own `<run_id>` so overlapping runs never collide on the same files.
 
 ### With options
 

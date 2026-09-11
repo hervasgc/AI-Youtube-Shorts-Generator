@@ -8,6 +8,7 @@ Two stages per highlight:
 """
 import os
 import subprocess
+import uuid
 from typing import Dict, List, Optional, Tuple
 
 from ..config import LOCAL_OUTPUT_DIR
@@ -149,9 +150,13 @@ def crop_highlights_local(
 ) -> List[Dict]:
     out_dir = out_dir or LOCAL_OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
+    # Fixed filenames would collide if two runs overlap (e.g. a double-click,
+    # two browser tabs on the same dev server) - one run's cleanup deletes the
+    # other's in-progress .cut.mp4, surfacing as "could not open" for every clip.
+    run_id = uuid.uuid4().hex[:8]
     results: List[Dict] = []
     for i, h in enumerate(highlights, 1):
-        out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
+        out_path = os.path.join(out_dir, f"short_{run_id}_{i:02d}.mp4")
         print(f"[clip/local] {i}/{len(highlights)}: {h.get('title', '(untitled)')}", flush=True)
         try:
             crop_clip_local(
