@@ -4,7 +4,7 @@
 > 1. Contexto para quem (ou qual IA) continuar o desenvolvimento deste repositório.
 > 2. Playbook de referência para futuros projetos a serem colocados em produção no GCP dentro da organização Media.Monks — os padrões de segurança e as armadilhas encontradas aqui tendem a se repetir em qualquer novo deploy.
 >
-> Última atualização: 2026-09-09.
+> Última atualização: 2026-09-11.
 
 ---
 
