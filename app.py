@@ -50,121 +50,133 @@ with st.sidebar:
 
 st.divider()
 
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+uploaded_file = None
+uploaded_blob_name = None
+
 # If GCS bucket is available, use direct-to-GCS upload
 if GCS_OUTPUT_BUCKET:
     st.markdown("### 📤 Upload Video (Direct to Cloud Storage)")
 
     from shorts_generator.local.storage import generate_gcs_upload_url
 
-    # Generate a unique blob name for this upload
-    upload_blob_name = f"uploads/sources/{uuid.uuid4().hex}.mp4"
-    try:
-        signed_url = generate_gcs_upload_url(GCS_OUTPUT_BUCKET, upload_blob_name, max_size_bytes=500*1024*1024)
+    # A file already staged in GCS from a previous rerun (round-trip via
+    # query param — components.v1.html runs in a sandboxed iframe and can't
+    # write back into Python state any other way).
+    uploaded_blob_name = st.query_params.get("uploaded_blob")
 
-        # HTML/JS component for direct GCS upload
-        upload_html = f"""
-        <div id="upload-container">
-            <input type="file" id="file-input" accept="video/*" />
-            <button id="upload-btn" style="margin-top: 10px; padding: 10px 20px; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; cursor: pointer;">
-                📤 Upload Video
-            </button>
-            <div id="progress" style="margin-top: 10px; display: none;">
-                <p id="status">Uploading...</p>
-                <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; overflow: hidden; height: 20px;">
-                    <div id="progress-bar" style="height: 100%; background-color: #FF4B4B; width: 0%; transition: width 0.3s;"></div>
+    if uploaded_blob_name:
+        st.success(f"✅ Vídeo enviado: `{uploaded_blob_name.rsplit('/', 1)[-1]}`. Pronto para gerar os shorts.")
+        if st.button("🔄 Enviar outro vídeo"):
+            st.query_params.clear()
+            st.rerun()
+    else:
+        # Generate a unique blob name for this upload
+        upload_blob_name = f"uploads/sources/{uuid.uuid4().hex}.mp4"
+        try:
+            signed_url = generate_gcs_upload_url(GCS_OUTPUT_BUCKET, upload_blob_name, max_size_bytes=MAX_UPLOAD_BYTES)
+
+            # HTML/JS component for direct GCS upload. On success it navigates
+            # the parent page to include ?uploaded_blob=<name>, which Streamlit
+            # picks up as a normal query param on the next rerun.
+            upload_html = f"""
+            <div id="upload-container">
+                <input type="file" id="file-input" accept="video/*" />
+                <button id="upload-btn" style="margin-top: 10px; padding: 10px 20px; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                    📤 Upload Video
+                </button>
+                <div id="progress" style="margin-top: 10px; display: none;">
+                    <p id="status">Uploading...</p>
+                    <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; overflow: hidden; height: 20px;">
+                        <div id="progress-bar" style="height: 100%; background-color: #FF4B4B; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <p id="progress-text">0%</p>
                 </div>
-                <p id="progress-text">0%</p>
+                <div id="success" style="margin-top: 10px; display: none; color: green;">
+                    ✅ Upload complete! Reloading...
+                </div>
+                <div id="error" style="margin-top: 10px; display: none; color: red;"></div>
             </div>
-            <div id="success" style="margin-top: 10px; display: none; color: green;">
-                ✅ Upload complete! Ready to generate shorts.
-            </div>
-            <div id="error" style="margin-top: 10px; display: none; color: red;"></div>
-        </div>
 
-        <script>
-        const fileInput = document.getElementById('file-input');
-        const uploadBtn = document.getElementById('upload-btn');
-        const progressDiv = document.getElementById('progress');
-        const progressBar = document.getElementById('progress-bar');
-        const progressText = document.getElementById('progress-text');
-        const statusText = document.getElementById('status');
-        const successDiv = document.getElementById('success');
-        const errorDiv = document.getElementById('error');
+            <script>
+            const fileInput = document.getElementById('file-input');
+            const uploadBtn = document.getElementById('upload-btn');
+            const progressDiv = document.getElementById('progress');
+            const statusText = document.getElementById('status');
+            const successDiv = document.getElementById('success');
+            const errorDiv = document.getElementById('error');
+            const MAX_BYTES = {MAX_UPLOAD_BYTES};
 
-        uploadBtn.addEventListener('click', async () => {{
-            const file = fileInput.files[0];
-            if (!file) {{
-                errorDiv.textContent = '❌ Please select a file first';
-                errorDiv.style.display = 'block';
-                return;
-            }}
-
-            uploadBtn.disabled = true;
-            progressDiv.style.display = 'block';
-            successDiv.style.display = 'none';
-            errorDiv.style.display = 'none';
-
-            try {{
-                const response = await fetch('{signed_url}', {{
-                    method: 'PUT',
-                    headers: {{'Content-Type': file.type}},
-                    body: file
-                }});
-
-                if (!response.ok) {{
-                    throw new Error(`Upload failed: ${{response.status}} ${{response.statusText}}`);
+            uploadBtn.addEventListener('click', async () => {{
+                const file = fileInput.files[0];
+                if (!file) {{
+                    errorDiv.textContent = '❌ Please select a file first';
+                    errorDiv.style.display = 'block';
+                    return;
+                }}
+                if (file.size > MAX_BYTES) {{
+                    errorDiv.textContent = `❌ File is ${{(file.size / 1024 / 1024).toFixed(0)}}MB, max allowed is 200MB`;
+                    errorDiv.style.display = 'block';
+                    return;
                 }}
 
-                // Success!
-                progressDiv.style.display = 'none';
-                successDiv.style.display = 'block';
+                uploadBtn.disabled = true;
+                progressDiv.style.display = 'block';
+                successDiv.style.display = 'none';
+                errorDiv.style.display = 'none';
 
-                // Store the blob name in sessionStorage for the app to use
-                sessionStorage.setItem('uploaded_blob_name', '{upload_blob_name}');
+                try {{
+                    const response = await fetch('{signed_url}', {{
+                        method: 'PUT',
+                        headers: {{'Content-Type': file.type}},
+                        body: file
+                    }});
 
-                // Notify streamlit app
-                window.parent.postMessage({{
-                    type: 'streamlit:custom_upload_complete',
-                    blob_name: '{upload_blob_name}'
-                }}, '*');
-            }} catch (error) {{
-                errorDiv.textContent = '❌ ' + error.message;
-                errorDiv.style.display = 'block';
-                progressDiv.style.display = 'none';
-            }} finally {{
-                uploadBtn.disabled = false;
-            }}
-        }});
+                    if (!response.ok) {{
+                        throw new Error(`Upload failed: ${{response.status}} ${{response.statusText}}`);
+                    }}
 
-        // Show file name when selected
-        fileInput.addEventListener('change', () => {{
-            if (fileInput.files[0]) {{
-                statusText.textContent = `Selected: ${{fileInput.files[0].name}}`;
-            }}
-        }});
-        </script>
-        """
+                    progressDiv.style.display = 'none';
+                    successDiv.style.display = 'block';
 
-        st.components.v1.html(upload_html, height=250)
+                    // Round-trip the blob name back to Streamlit via a full
+                    // page navigation with a query param (same-origin iframe).
+                    const target = window.parent;
+                    const url = new URL(target.location.href);
+                    url.searchParams.set('uploaded_blob', '{upload_blob_name}');
+                    target.location.href = url.toString();
+                }} catch (error) {{
+                    errorDiv.textContent = '❌ ' + error.message;
+                    errorDiv.style.display = 'block';
+                    progressDiv.style.display = 'none';
+                }} finally {{
+                    uploadBtn.disabled = false;
+                }}
+            }});
 
-        # Check if upload was successful (via sessionStorage in JS)
-        uploaded_blob_name = None
+            fileInput.addEventListener('change', () => {{
+                if (fileInput.files[0]) {{
+                    statusText.textContent = `Selected: ${{fileInput.files[0].name}}`;
+                }}
+            }});
+            </script>
+            """
 
-    except Exception as e:
-        st.error(f"Error generating upload URL: {e}")
-        # Fallback to regular file uploader
-        uploaded_file = st.file_uploader(
-            "📤 Selecione o vídeo (fallback)",
-            type=["mp4", "mov", "mkv", "webm", "m4v"],
-        )
-        uploaded_blob_name = None
+            st.components.v1.html(upload_html, height=250)
+
+        except Exception as e:
+            st.error(f"Error generating upload URL: {e}")
+            # Fallback to regular file uploader
+            uploaded_file = st.file_uploader(
+                "📤 Selecione o vídeo (fallback)",
+                type=["mp4", "mov", "mkv", "webm", "m4v"],
+            )
 else:
     # Fallback: local file uploader when GCS not configured
     uploaded_file = st.file_uploader(
         "📤 Selecione o vídeo",
         type=["mp4", "mov", "mkv", "webm", "m4v"],
     )
-    uploaded_blob_name = None
 
 if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
     has_file = False
