@@ -1,7 +1,7 @@
 """CLI entry point.
 
 Usage:
-    python main.py "https://www.youtube.com/watch?v=..." \
+    python main.py "/path/to/video.mp4" \
         --num-clips 3 --aspect-ratio 9:16
 """
 import argparse
@@ -20,35 +20,25 @@ from shorts_generator import generate_shorts
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI YouTube Shorts Generator")
-    parser.add_argument("url", help="YouTube URL, file:// URL, or local file path")
-    parser.add_argument(
-        "--mode",
-        choices=["api", "local"],
-        default="api",
-        help="api (default, MuAPI) or local (remote URL, file://, or local path + faster-whisper + LLM provider + ffmpeg).",
-    )
+    parser.add_argument("file_path", help="Local file path")
     parser.add_argument("--num-clips", type=int, default=3, help="How many shorts to render (default: 3)")
     parser.add_argument("--aspect-ratio", default="9:16", help="Output aspect ratio (default: 9:16)")
-    parser.add_argument("--format", default="720", help="Source download resolution: 360 / 480 / 720 / 1080 (default: 720)")
     parser.add_argument("--language", default=None, help="Force Whisper language code, e.g. 'en' (default: auto-detect)")
     parser.add_argument("--output-json", default=None, help="Write the full result JSON to this path")
     args = parser.parse_args()
 
     try:
         result = generate_shorts(
-            youtube_url=args.url,
+            youtube_url=args.file_path,
             num_clips=args.num_clips,
             aspect_ratio=args.aspect_ratio,
-            download_format=args.format,
             language=args.language,
-            mode=args.mode,
         )
     except Exception as e:
         print(f"\nFAILED: {e}", file=sys.stderr)
         return 1
 
     print("\n" + "=" * 72)
-    print(f"Mode:          {result.get('mode', args.mode)}")
     print(f"Source video:  {result['source_video_url']}")
     print(f"Highlights:    {len(result['highlights'])} candidates → kept top {len(result['shorts'])}")
     print("=" * 72)

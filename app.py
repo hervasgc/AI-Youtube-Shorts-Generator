@@ -24,12 +24,7 @@ st.markdown("Transform long YouTube videos into viral-ready 9:16 shorts instantl
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    mode = st.radio(
-        "Processing Mode",
-        ["local", "api"],
-        index=0,
-        help="'local' runs entirely on your machine. 'api' uses MuAPI cloud."
-    )
+    mode = "local"
     
     num_clips = st.number_input(
         "Number of Clips",
@@ -46,13 +41,7 @@ with st.sidebar:
         help="9:16 for TikTok/Reels, 1:1 for square."
     )
     
-    download_format = st.selectbox(
-        "Source Resolution",
-        ["360", "480", "720", "1080"],
-        index=2,
-        help="Quality of the downloaded video before cropping."
-    )
-    
+
     language = st.text_input(
         "Language Override (Optional)",
         value="",
@@ -62,22 +51,12 @@ with st.sidebar:
 
 st.divider()
 
-source_kind = st.radio(
-    "Fonte do vídeo",
-    ["🔗 URL do YouTube", "📤 Enviar arquivo"],
-    index=0,
-    horizontal=True,
-    help="Na nuvem, prefira 'Enviar arquivo' — baixar por URL pode ser bloqueado pelo YouTube (detecção de bot em IPs de datacenter). Baixe localmente e envie o arquivo aqui.",
-)
-
 url = None
 uploaded_file = None
 gcs_upload_blob = None
 upload_confirmed = False
 
-if source_kind == "🔗 URL do YouTube":
-    url = st.text_input("🔗 Paste YouTube URL or local file path here", placeholder="https://www.youtube.com/watch?v=...")
-elif GCS_OUTPUT_BUCKET:
+if GCS_OUTPUT_BUCKET:
     # Cloud Run caps request bodies at ~32MB, so a real source video can't go
     # through st.file_uploader (which POSTs through the same Cloud Run
     # request path). Instead the browser uploads straight to GCS with a
@@ -125,11 +104,9 @@ else:
     )
 
 if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
-    if source_kind == "🔗 URL do YouTube" and not url:
-        st.warning("Please enter a valid URL or path.")
-    elif source_kind == "📤 Enviar arquivo" and GCS_OUTPUT_BUCKET and not upload_confirmed:
+    if GCS_OUTPUT_BUCKET and not upload_confirmed:
         st.warning("Envie o arquivo acima e marque a confirmação antes de continuar.")
-    elif source_kind == "📤 Enviar arquivo" and not GCS_OUTPUT_BUCKET and not uploaded_file:
+    elif not GCS_OUTPUT_BUCKET and not uploaded_file:
         st.warning("Selecione um arquivo de vídeo para continuar.")
     else:
         if uploaded_file is not None:
@@ -165,9 +142,7 @@ if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
                     youtube_url=url,
                     num_clips=int(num_clips),
                     aspect_ratio=aspect_ratio,
-                    download_format=download_format,
                     language=lang_param,
-                    mode=mode,
                 )
                 
             status_text.success("Generation complete!")
