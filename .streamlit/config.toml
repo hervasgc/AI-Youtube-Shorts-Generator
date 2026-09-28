@@ -1,7 +1,7 @@
 [server]
-maxUploadSize = 200
-maxMessageSize = 200
-timeout = 3600
+maxUploadSize = 500
+maxMessageSize = 500
+headerConfigs = {requestHeadersToExclude = ["Content-Length"]}
 
 [client]
 toolbarMode = "minimal"
