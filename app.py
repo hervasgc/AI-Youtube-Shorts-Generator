@@ -60,25 +60,32 @@ if GCS_OUTPUT_BUCKET:
 
     from shorts_generator.local.storage import generate_gcs_upload_url
 
-    # A file already staged in GCS from a previous rerun (round-trip via
-    # query param — components.v1.html runs in a sandboxed iframe and can't
-    # write back into Python state any other way).
-    uploaded_blob_name = st.query_params.get("uploaded_blob")
+    # components.v1.html renders in a sandboxed iframe that Chrome/Firefox
+    # refuse to let navigate the parent page (even same-origin), so JS can't
+    # hand the blob name back via a URL. Use session_state instead: keep the
+    # blob name stable across reruns, and let the user confirm the upload
+    # with a real Streamlit button once the JS widget reports success.
+    if "gcs_upload_blob" not in st.session_state:
+        st.session_state.gcs_upload_blob = f"uploads/sources/{uuid.uuid4().hex}.mp4"
+    if "gcs_upload_confirmed" not in st.session_state:
+        st.session_state.gcs_upload_confirmed = False
+
+    uploaded_blob_name = st.session_state.gcs_upload_blob if st.session_state.gcs_upload_confirmed else None
 
     if uploaded_blob_name:
         st.success(f"✅ Vídeo enviado: `{uploaded_blob_name.rsplit('/', 1)[-1]}`. Pronto para gerar os shorts.")
         if st.button("🔄 Enviar outro vídeo"):
-            st.query_params.clear()
+            del st.session_state["gcs_upload_blob"]
+            st.session_state.gcs_upload_confirmed = False
             st.rerun()
     else:
-        # Generate a unique blob name for this upload
-        upload_blob_name = f"uploads/sources/{uuid.uuid4().hex}.mp4"
+        upload_blob_name = st.session_state.gcs_upload_blob
         try:
             signed_url = generate_gcs_upload_url(GCS_OUTPUT_BUCKET, upload_blob_name, max_size_bytes=MAX_UPLOAD_BYTES)
 
-            # HTML/JS component for direct GCS upload. On success it navigates
-            # the parent page to include ?uploaded_blob=<name>, which Streamlit
-            # picks up as a normal query param on the next rerun.
+            # HTML/JS component for direct GCS upload. It only does the PUT;
+            # the "Já enviei, continuar" button below confirms the object
+            # landed in GCS and advances the real Streamlit state.
             upload_html = f"""
             <div id="upload-container">
                 <input type="file" id="file-input" accept="video/*" />
@@ -93,7 +100,7 @@ if GCS_OUTPUT_BUCKET:
                     <p id="progress-text">0%</p>
                 </div>
                 <div id="success" style="margin-top: 10px; display: none; color: green;">
-                    ✅ Upload complete! Reloading...
+                    ✅ Upload complete! Clique em "Já enviei, continuar" abaixo.
                 </div>
                 <div id="error" style="margin-top: 10px; display: none; color: red;"></div>
             </div>
@@ -138,13 +145,7 @@ if GCS_OUTPUT_BUCKET:
 
                     progressDiv.style.display = 'none';
                     successDiv.style.display = 'block';
-
-                    // Round-trip the blob name back to Streamlit via a full
-                    // page navigation with a query param (same-origin iframe).
-                    const target = window.parent;
-                    const url = new URL(target.location.href);
-                    url.searchParams.set('uploaded_blob', '{upload_blob_name}');
-                    target.location.href = url.toString();
+                    uploadBtn.style.display = 'none';
                 }} catch (error) {{
                     errorDiv.textContent = '❌ ' + error.message;
                     errorDiv.style.display = 'block';
@@ -163,6 +164,16 @@ if GCS_OUTPUT_BUCKET:
             """
 
             st.components.v1.html(upload_html, height=250)
+
+            if st.button("✅ Já enviei, continuar"):
+                from google.cloud import storage
+                client = storage.Client()
+                blob = client.bucket(GCS_OUTPUT_BUCKET).blob(upload_blob_name)
+                if blob.exists():
+                    st.session_state.gcs_upload_confirmed = True
+                    st.rerun()
+                else:
+                    st.warning("Ainda não recebi o arquivo no bucket. Espere o upload terminar (barra 100%) e tente de novo.")
 
         except Exception as e:
             st.error(f"Error generating upload URL: {e}")
