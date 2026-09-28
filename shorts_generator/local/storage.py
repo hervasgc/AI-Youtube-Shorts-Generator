@@ -13,12 +13,16 @@ from ..config import GCS_OUTPUT_BUCKET, GCS_SIGNED_URL_EXPIRY_SECONDS
 
 def upload_and_sign(local_path: str, dest_name: str) -> str:
     from google.cloud import storage
+    from google.auth.iam import Signer
+    from google.auth.transport.requests import Request
     import google.auth
 
     credentials, project = google.auth.default()
 
     if not hasattr(credentials, 'service_account_email'):
         raise ValueError("Credentials must have a service_account_email (use service account credentials)")
+
+    signer = Signer(Request(), credentials.service_account_email)
 
     client = storage.Client()
     bucket = client.bucket(GCS_OUTPUT_BUCKET)
@@ -29,7 +33,7 @@ def upload_and_sign(local_path: str, dest_name: str) -> str:
         version="v4",
         expiration=datetime.timedelta(seconds=GCS_SIGNED_URL_EXPIRY_SECONDS),
         method="GET",
-        service_account_email=credentials.service_account_email,
+        signing_credentials=signer,
     )
 
 
@@ -37,16 +41,21 @@ def generate_upload_url(dest_name: str, expiry_seconds: int = 1800) -> str:
     """Signed PUT URL so the browser can upload straight to GCS, bypassing
     Cloud Run's ~32MB request body limit entirely.
 
-    On Cloud Run, passing service_account_email makes google-cloud-storage
-    use IAM signBlob API to sign the URL instead of requiring a private key.
+    On Cloud Run, uses IAM signBlob API via iam.Signer to sign without
+    requiring a private key file.
     """
     from google.cloud import storage
+    from google.auth.iam import Signer
+    from google.auth.transport.requests import Request
     import google.auth
 
     credentials, project = google.auth.default()
 
     if not hasattr(credentials, 'service_account_email'):
         raise ValueError("Credentials must have a service_account_email (use service account credentials)")
+
+    # iam.Signer uses IAM signBlob API to sign (no private key needed on Cloud Run)
+    signer = Signer(Request(), credentials.service_account_email)
 
     client = storage.Client()
     bucket = client.bucket(GCS_OUTPUT_BUCKET)
@@ -56,7 +65,7 @@ def generate_upload_url(dest_name: str, expiry_seconds: int = 1800) -> str:
         version="v4",
         expiration=datetime.timedelta(seconds=expiry_seconds),
         method="PUT",
-        service_account_email=credentials.service_account_email,
+        signing_credentials=signer,
     )
 
 
