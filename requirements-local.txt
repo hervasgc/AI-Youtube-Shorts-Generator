@@ -4,7 +4,11 @@
 faster-whisper>=1.0.0
 openai>=1.0.0
 google-genai>=1.0.0
-opencv-python-headless>=4.8.0
+# Pinned below 5.0: that release dropped cv2.CascadeClassifier and the bundled
+# Haar cascade XML data files (moved to a DNN-based FaceDetectorYN model
+# instead), which shorts_generator/local/clipper.py relies on for face-aware
+# vertical cropping.
+opencv-python-headless>=4.8.0,<5
 # torch is only needed if you want CUDA Whisper. CPU works without it.
 # torch>=2.0
 streamlit>=1.30.0
