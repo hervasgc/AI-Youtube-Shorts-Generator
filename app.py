@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import sys
 import uuid
+import json
 
 # Ensure the app can import from shorts_generator
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,9 +22,9 @@ st.markdown("Transform long YouTube videos into viral-ready 9:16 shorts instantl
 # Sidebar Configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
-    
+
     mode = "local"
-    
+
     num_clips = st.number_input(
         "Number of Clips",
         min_value=1,
@@ -31,14 +32,14 @@ with st.sidebar:
         value=3,
         help="How many shorts to generate."
     )
-    
+
     aspect_ratio = st.selectbox(
         "Aspect Ratio",
         ["9:16", "1:1", "16:9"],
         index=0,
         help="9:16 for TikTok/Reels, 1:1 for square."
     )
-    
+
 
     language = st.text_input(
         "Language Override (Optional)",
@@ -49,16 +50,150 @@ with st.sidebar:
 
 st.divider()
 
-uploaded_file = st.file_uploader(
-    "📤 Selecione o vídeo",
-    type=["mp4", "mov", "mkv", "webm", "m4v"],
-)
+# If GCS bucket is available, use direct-to-GCS upload
+if GCS_OUTPUT_BUCKET:
+    st.markdown("### 📤 Upload Video (Direct to Cloud Storage)")
+
+    from shorts_generator.local.storage import generate_gcs_upload_url
+
+    # Generate a unique blob name for this upload
+    upload_blob_name = f"uploads/sources/{uuid.uuid4().hex}.mp4"
+    try:
+        signed_url = generate_gcs_upload_url(GCS_OUTPUT_BUCKET, upload_blob_name, max_size_bytes=500*1024*1024)
+
+        # HTML/JS component for direct GCS upload
+        upload_html = f"""
+        <div id="upload-container">
+            <input type="file" id="file-input" accept="video/*" />
+            <button id="upload-btn" style="margin-top: 10px; padding: 10px 20px; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                📤 Upload Video
+            </button>
+            <div id="progress" style="margin-top: 10px; display: none;">
+                <p id="status">Uploading...</p>
+                <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; overflow: hidden; height: 20px;">
+                    <div id="progress-bar" style="height: 100%; background-color: #FF4B4B; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <p id="progress-text">0%</p>
+            </div>
+            <div id="success" style="margin-top: 10px; display: none; color: green;">
+                ✅ Upload complete! Ready to generate shorts.
+            </div>
+            <div id="error" style="margin-top: 10px; display: none; color: red;"></div>
+        </div>
+
+        <script>
+        const fileInput = document.getElementById('file-input');
+        const uploadBtn = document.getElementById('upload-btn');
+        const progressDiv = document.getElementById('progress');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const statusText = document.getElementById('status');
+        const successDiv = document.getElementById('success');
+        const errorDiv = document.getElementById('error');
+
+        uploadBtn.addEventListener('click', async () => {{
+            const file = fileInput.files[0];
+            if (!file) {{
+                errorDiv.textContent = '❌ Please select a file first';
+                errorDiv.style.display = 'block';
+                return;
+            }}
+
+            uploadBtn.disabled = true;
+            progressDiv.style.display = 'block';
+            successDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+
+            try {{
+                const response = await fetch('{signed_url}', {{
+                    method: 'PUT',
+                    headers: {{'Content-Type': file.type}},
+                    body: file
+                }});
+
+                if (!response.ok) {{
+                    throw new Error(`Upload failed: ${{response.status}} ${{response.statusText}}`);
+                }}
+
+                // Success!
+                progressDiv.style.display = 'none';
+                successDiv.style.display = 'block';
+
+                // Store the blob name in sessionStorage for the app to use
+                sessionStorage.setItem('uploaded_blob_name', '{upload_blob_name}');
+
+                // Notify streamlit app
+                window.parent.postMessage({{
+                    type: 'streamlit:custom_upload_complete',
+                    blob_name: '{upload_blob_name}'
+                }}, '*');
+            }} catch (error) {{
+                errorDiv.textContent = '❌ ' + error.message;
+                errorDiv.style.display = 'block';
+                progressDiv.style.display = 'none';
+            }} finally {{
+                uploadBtn.disabled = false;
+            }}
+        }});
+
+        // Show file name when selected
+        fileInput.addEventListener('change', () => {{
+            if (fileInput.files[0]) {{
+                statusText.textContent = `Selected: ${{fileInput.files[0].name}}`;
+            }}
+        }});
+        </script>
+        """
+
+        st.components.v1.html(upload_html, height=250)
+
+        # Check if upload was successful (via sessionStorage in JS)
+        uploaded_blob_name = None
+
+    except Exception as e:
+        st.error(f"Error generating upload URL: {e}")
+        # Fallback to regular file uploader
+        uploaded_file = st.file_uploader(
+            "📤 Selecione o vídeo (fallback)",
+            type=["mp4", "mov", "mkv", "webm", "m4v"],
+        )
+        uploaded_blob_name = None
+else:
+    # Fallback: local file uploader when GCS not configured
+    uploaded_file = st.file_uploader(
+        "📤 Selecione o vídeo",
+        type=["mp4", "mov", "mkv", "webm", "m4v"],
+    )
+    uploaded_blob_name = None
 
 if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
-    if not uploaded_file:
-        st.warning("Selecione um arquivo de vídeo para continuar.")
-    else:
-        # Save to local temp file first
+    has_file = False
+    local_path = None
+
+    # Check if file was uploaded via direct GCS or via file uploader
+    if uploaded_blob_name:
+        # File was uploaded directly to GCS via JavaScript
+        has_file = True
+        st.info(f"Using file from GCS: {uploaded_blob_name}")
+
+        # Download from GCS to local temp file
+        os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+        local_path = os.path.join(LOCAL_OUTPUT_DIR, f"gcs_download_{uuid.uuid4().hex}.mp4")
+
+        try:
+            from google.cloud import storage
+            client = storage.Client()
+            bucket = client.bucket(GCS_OUTPUT_BUCKET)
+            blob = bucket.blob(uploaded_blob_name)
+            blob.download_to_filename(local_path)
+            st.success("Downloaded from GCS")
+        except Exception as e:
+            st.error(f"Failed to download from GCS: {e}")
+            has_file = False
+
+    elif uploaded_file:
+        # File was uploaded via regular Streamlit file uploader
+        has_file = True
         os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
         ext = os.path.splitext(uploaded_file.name)[1] or ".mp4"
         local_path = os.path.join(LOCAL_OUTPUT_DIR, f"upload_{uuid.uuid4().hex}{ext}")
@@ -66,16 +201,9 @@ if st.button("🚀 Generate Shorts", type="primary", use_container_width=True):
         with open(local_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # If GCS bucket is configured, also save the source video there for retention
-        if GCS_OUTPUT_BUCKET:
-            from google.cloud import storage
-            client = storage.Client()
-            bucket = client.bucket(GCS_OUTPUT_BUCKET)
-            source_blob_name = f"uploads/sources/{uuid.uuid4().hex}.mp4"
-            blob = bucket.blob(source_blob_name)
-            blob.upload_from_filename(local_path)
-            st.info(f"Arquivo salvo em gs://{GCS_OUTPUT_BUCKET}/{source_blob_name}")
-
+    if not has_file:
+        st.warning("Selecione um arquivo de vídeo para continuar.")
+    else:
         url = local_path
         # Provide feedback
         status_text = st.empty()
